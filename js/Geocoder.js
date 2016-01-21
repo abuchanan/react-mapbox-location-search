@@ -38,33 +38,14 @@ const manage_queries = csp.go(function*(query_ch, output_ch, cancel_ch, do_reque
 });
 
 
-/*
-  I like:
-  - the power of alts
-  - the ability to think of data as a stream when convenient
-  - seems to make cancelation easy because no (Promise) value is pushed downstream
-
-  I dislike:
-  - spawn and go
-  -- can clean up with babel
-
-  - confusion about put vs putAsync
-  -- the main thing is that you need a "yield" in order to give the
-     backing generator a chance to block. Not sure why put() doesn't work
-     without async.
-  -- can possibly clean up with babel
-
-  - mess of creating a pipeline of channels
-  -- might be a useful sugar for syntax, or maybe a pipeline() helper
-
-  - reimplementing cancel in every part of the pipeline
-  -- turns out this isn't so bad and it needs to be implemented differently
-     depending on the context anyway.
-*/
-
 function do_request(client, query, response_ch) {
   client.geocodeForward(query, (err, results) => {
-    // TODO handle error
+    if (err) {
+      console.error("Error from geocodeForward response", err);
+      results = {
+        features: [],
+      };
+    }
     csp.put.async(response_ch, {query, results});
   });
 }
