@@ -1,147 +1,80 @@
 import MapboxClient from 'mapbox';
-import * as csp from './csp';
 
 
-const clear_buffer_on_signal = csp.go(function*(buffer, signal_ch) {
-    while (!signal_ch.closed) {
-      yield signal_ch;
-      csp.clear_buffer(buffer);
-    }
-});
+class Request {
+  constructor(client, cache, callback, query) {
+    this.canceled = false;
 
-const manage_queries = csp.go(function*(query_ch, output_ch, cancel_ch, do_request) {
-
-    let response_ch = csp.NEVER;
-
-    while (!query_ch.closed || response_ch !== csp.NEVER) {
-      let {channel, value} = yield csp.select(query_ch, response_ch, cancel_ch);
-
-      switch (channel) {
-        case query_ch:
-          let query = value;
-          // TODO should close the existing response channel probably.
-          //      but have to check if it's NEVER, which is annoying.
-          response_ch = csp.channel();
-          do_request(query, response_ch);
-          break;
-
-        case response_ch:
-          let response = value;
-          yield csp.put(output_ch, response);
-          break;
-
-        case cancel_ch:
-          response_ch = csp.NEVER;
-          break;
+    client.geocodeForward(query, (error, results) => {
+      if (this.canceled) {
+        return;
       }
-    }
-});
 
+      if (error) {
+        callback('error', error);
+        return;
+      }
 
-function do_request(client, query, response_ch) {
-  client.geocodeForward(query, (err, results) => {
-    if (err) {
-      console.error("Error from geocodeForward response", err);
-      results = {
-        features: [],
-      };
-    }
-    csp.put.async(response_ch, {query, results});
-  });
+      cache.set(query, results);
+      callback('results', results);
+    });
+  }
 }
 
-
-const MIN_QUERY_LENGTH = 3;
-const DEBOUNCE_TIME = 300; // milliseconds
-
-function split_short_queries(queries_ch) {
-  return csp.split(query => query.length < MIN_QUERY_LENGTH, queries_ch);
-}
 
 class Geocoder {
 
-  // TODO could convert this to export its queries/results channels
-  constructor(Mapbox_access_key, results_callback) {
-    let client = new MapboxClient(Mapbox_access_key);
-
-    // Query strings are received here via Geocoder.geocode_forward().
-    let queries_ch = this._queries_ch = csp.channel();
-
-    // Query results will be received here via manage_queries().
-    let results_buffer = csp.buffers.sliding(1);
-    let results_ch = csp.channel(results_buffer);
-
-    // Cache query results.
-    let cache = new Map();
-    let cache_miss_ch = csp.channel();
-
-    function* check_cache() {
-      while (!queries_ch.closed) {
-        let query = yield queries_ch;
-        if (cache.has(query)) {
-          yield csp.put(results_ch, {query, results: cache.get(query)});
-        } else {
-          yield csp.put(cache_miss_ch, query);
-        }
-      }
-    }
-    csp.go.run(check_cache);
-    // Updating the cache with results happens later in handle_results()
-
-    /*
-      A couple actions can cause the geocode request to be canceled:
-      1. A call to Geocoder.clear().
-      2. A short query. See MIN_QUERY_LENGTH.
-    */
-    let cancel_broadcast = this._cancel_broadcast = csp.broadcast();
-    clear_buffer_on_signal(results_buffer, cancel_broadcast.tap());
-
-    /*
-      There are lots of cases where you might be many queries in a short time,
-      such as the user typing in a location search box, so wait until no queries
-      have arrive for DEBOUNCE_TIME before sending a request.
-    */
-    let debounced_ch = csp.channel();
-    csp.debounce(cache_miss_ch, debounced_ch, DEBOUNCE_TIME);
-
-    // Don't bother sending requests for short queries. See MIN_QUERY_LENGTH.
-    let [short_queries, long_queries] = split_short_queries(debounced_ch);
-    cancel_broadcast.add_input(short_queries);
-
-    let bound_do_request = do_request.bind(null, client);
-    manage_queries(long_queries, results_ch, cancel_broadcast.tap(), bound_do_request);
-
-    // Handle cancels and results.
-    function* handle_results() {
-      let cancel_ch = cancel_broadcast.tap();
-
-      while (!cancel_ch.closed || !results_ch.closed) {
-        let {channel, value} = yield csp.select(cancel_ch, results_ch);
-
-        switch (channel) {
-
-          case cancel_ch:
-            // Whenever the query is canceled, clear the results.
-            results_callback({features: []});
-            break;
-
-          case results_ch:
-            let {query, results} = value;
-            cache.set(query, results);
-            results_callback(results);
-        }
-      }
-    }
-    csp.go.run(handle_results);
+  constructor(Mapbox_access_key, callback) {
+    this.min_query_length = 3;
+    this.debounce_time = 300; // milliseconds
+    this._callback = callback;
+    this._client = new MapboxClient(Mapbox_access_key);
+    this._current_request = null;
+    this._cache = new Map();
   }
 
-  geocode_forward(query) {
+  _do_query(query) {
+    if (this._current_request) {
+      this._current_request.canceled = true;
+    }
+
     query = query.toLowerCase();
-    csp.put.async(this._queries_ch, query);
+
+    if (this._cache.has(query)) {
+      this._callback('results', cache.get(query));
+    } else {
+      this._current_request = new Request(this._client, this._cache,
+                                          this._callback, query);
+      this._callback('loading');
+    }
+  }
+
+  /*
+    There are lots of cases where there might be many queries in a short time,
+    such as the user typing in a location search box, so wait until no queries
+    have arrive for {this.debounce_time} before sending a request.
+  */
+  _queue(query) {
+      clearTimeout(this._debounce_timeout);
+      this._debounce_timeout = setTimeout(() => {
+        this._do_query(query);
+      }, this.debounce_time);
+  }
+
+  geocodeForward(query) {
+    if (query.length < this.min_query_length) {
+      this._callback('query too short');
+    } else {
+      this._queue(query);
+    }
   }
 
   clear() {
-    csp.put.async(this._cancel_broadcast.input, true);
+    if (this._current_request) {
+      this._current_request.canceled = true;
+    }
+    clearTimeout(this._debounce_timeout);
+    this._callback('cleared');
   }
 }
 

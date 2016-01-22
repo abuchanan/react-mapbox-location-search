@@ -9,12 +9,59 @@ const LocationSearch = React.createClass({
   },
 
   getInitialState() {
-    return {results: [], highlighted: 0, value: ""};
+    return {
+      resultsState: "cleared",
+      results: [],
+      highlighted: 0,
+      value: ""
+    };
   },
 
   componentDidMount() {
-    this.geocoder = new Geocoder(this.props.Mapbox_access_key, results => {
-      this.setState({results: results.features});
+    let key = this.props.Mapbox_access_key;
+
+    this.geocoder = new Geocoder(key, (state, results) => {
+
+      if (state == "error") {
+        console.error("Error with geocode request", results);
+        this.setState({
+          resultsState: "no results",
+          results: [],
+        });
+
+      } else if (state == "query too short") {
+        this.setState({
+          resultsState: "cleared",
+          results: [],
+        });
+
+      } else if (state == "cleared") {
+        this.setState({
+          resultsState: "cleared",
+          results: [],
+        });
+
+      } else if (state == "loading") {
+        this.setState({
+          resultsState: "loading",
+          results: [],
+        });
+
+      } else if (state == "results") {
+
+        if (results.features.length > 0) {
+          this.setState({
+            resultsState: "results",
+            results: results.features,
+          });
+
+        } else {
+          this.setState({
+            resultsState: "no results",
+            results: [],
+          });
+        }
+      }
     });
   },
 
@@ -23,36 +70,64 @@ const LocationSearch = React.createClass({
   },
 
   highlight(idx) {
-    this.setState({highlighted: idx});
+    this.setState({
+      highlighted: idx
+    });
   },
 
   select_result(result) {
     this.props.onResultSelected(result);
-    this.setState({value: result.place_name});
+    this.geocoder.clear();
+    this.setState({
+      value: result.place_name
+    });
   },
 
   handle_change(e) {
-    this.setState({value: e.target.value});
-    this.geocoder.geocode_forward(e.target.value);
+    var value = e.target.value;
+
+    this.setState({
+      value,
+    });
+    this.geocoder.geocodeForward(value);
   },
 
   render() {
+    var results;
+    var resultsState = this.state.resultsState;
 
-    // TODO "No results" message when query but no results
-    // TODO loading spinner
-    var results = this.state.results.map((result, idx) => {
-      return (
-        <li role="option" key={result.id}>
-          <Result
-            idx={idx}
-            onMouseOver={e => this.highlight(idx)}
-            onMouseDown={e => this.select_result(result)}
-            highlighted={idx == this.state.highlighted}
-            result={result}
-          />
-        </li>
+    if (resultsState == "cleared") {
+      results = "";
+
+    } else if (resultsState == "results") {
+      results = (
+        <ul className='location-search-results' role="listbox">
+          {this.state.results.map((result, idx) => {
+            return (
+              <li role="option" key={result.id}>
+                <Result
+                  idx={idx}
+                  onMouseOver={e => this.highlight(idx)}
+                  onMouseDown={e => this.select_result(result)}
+                  highlighted={idx == this.state.highlighted}
+                  result={result}
+                />
+              </li>
+            );
+          })}
+        </ul>
       );
-    });
+
+    } else if (resultsState == "loading") {
+      results = (
+        <div className='location-search-loading'>Loading</div>
+      );
+
+    } else if (resultsState == "no results") {
+      results = (
+        <div className='location-search-no-results'>No results</div>
+      );
+    }
 
     return (
       <div>
@@ -68,13 +143,9 @@ const LocationSearch = React.createClass({
           role="combobox"
           aria-autocomplete="list"
           aria-owns="location-search-results"
-          aria-expanded={results.length > 0}
+          aria-expanded={resultsState == "show"}
         />
-        <div className='location-search-results' role="listbox">
-          <ul>
-          {results}
-          </ul>
-        </div>
+        {results}
       </div>
     );
   }
