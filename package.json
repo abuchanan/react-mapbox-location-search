@@ -8,8 +8,8 @@
     "build": "babel -d dist js/",
     "prebuild:debug": "rimraf debug",
     "build:debug": "babel -d debug --source-maps inline js/",
-    "preserve-test": "npm run build:debug && cp css/LocationSearch.css test/ && browserify --entry test/entry.js --outfile test/bundle.js",
-    "serve-test": "node test/server.js 3030 test/"
+    "preserve-test": "npm run build:debug && cp css/LocationSearch.css debug/ && cp test/index.html debug/ && browserify --entry test/entry.js --outfile debug/bundle.js",
+    "serve-test": "node test/server.js 3030 debug/"
   },
   "repository": {
     "type": "git",
