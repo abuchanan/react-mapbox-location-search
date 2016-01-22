@@ -6,7 +6,9 @@
   "scripts": {
     "prebuild": "rimraf dist",
     "build": "babel -d dist js/",
-    "preserve-test": "cp css/LocationSearch.css test/ && browserify --entry test/entry.js --outfile test/bundle.js",
+    "prebuild:debug": "rimraf debug",
+    "build:debug": "babel -d debug --source-maps inline js/",
+    "preserve-test": "npm run build:debug && cp css/LocationSearch.css test/ && browserify --entry test/entry.js --outfile test/bundle.js",
     "serve-test": "node test/server.js 3030 test/"
   },
   "repository": {
